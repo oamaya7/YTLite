@@ -1,0 +1,9 @@
+Package: com.oamaya7.ytlite.settingsfix
+Name: YTLite Settings Crash Fix
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Runtime patch to prevent settings-related gesture crashes.
+Maintainer: oamaya7
+Author: oamaya7
+Section: Tweaks

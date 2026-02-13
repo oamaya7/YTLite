@@ -4,6 +4,9 @@ static UIImage *YTImageNamed(NSString *imageName) {
     return [UIImage imageNamed:imageName inBundle:[NSBundle mainBundle] compatibleWithTraitCollection:nil];
 }
 
+static NSString * const kYTLSpeedmasterGestureName = @"ytl.speedmaster.longpress";
+static NSString * const kYTLManageTabGestureName = @"ytl.tab.manage.longpress";
+
 // YouTube-X (https://github.com/PoomSmart/YouTube-X/)
 // Background Playback
 %hook YTIPlayabilityStatus
@@ -218,7 +221,18 @@ static UIImage *YTImageNamed(NSString *imageName) {
 
 // Remove HUD Messages
 %hook YTHUDMessageView
-- (id)initWithMessage:(id)arg1 dismissHandler:(id)arg2 { return ytlBool(@"noHUDMsgs") ? nil : %orig; }
+- (id)initWithMessage:(id)arg1 dismissHandler:(id)arg2 {
+    id hudMessageView = %orig;
+
+    if (ytlBool(@"noHUDMsgs") && [hudMessageView isKindOfClass:[UIView class]]) {
+        UIView *view = (UIView *)hudMessageView;
+        view.hidden = YES;
+        view.alpha = 0.0;
+        view.userInteractionEnabled = NO;
+    }
+
+    return hudMessageView;
+}
 %end
 
 %hook YTColdConfig
@@ -1195,9 +1209,18 @@ static void genImageFromLayer(CALayer *layer, UIColor *backgroundColor, void (^c
         [self.navigationButton setSizeWithPaddingAndInsets:NO];
     }
 
+    if (![self.renderer.pivotIdentifier isEqualToString:@"FEwhat_to_watch"]) return;
+
+    for (UIGestureRecognizer *gesture in self.gestureRecognizers) {
+        if ([gesture isKindOfClass:[UILongPressGestureRecognizer class]] && [gesture.name isEqualToString:kYTLManageTabGestureName]) {
+            return;
+        }
+    }
+
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(manageTab:)];
     longPress.minimumPressDuration = 0.3;
-    if ([self.renderer.pivotIdentifier isEqualToString:@"FEwhat_to_watch"]) [self addGestureRecognizer:longPress];
+    longPress.name = kYTLManageTabGestureName;
+    [self addGestureRecognizer:longPress];
 }
 
 %new
@@ -1321,11 +1344,24 @@ static void manageSpeedmasterYTLite(UILongPressGestureRecognizer *gesture, YTMai
 
 %hook YTMainAppVideoPlayerOverlayView
 - (void)setSeekAnywherePanGestureRecognizer:(id)arg1 {
-    if (ytlInt(@"speedIndex") == 0) return %orig;
+    %orig;
+
+    for (UIGestureRecognizer *gesture in [self.gestureRecognizers copy]) {
+        if ([gesture isKindOfClass:[UILongPressGestureRecognizer class]] && [gesture.name isEqualToString:kYTLSpeedmasterGestureName]) {
+            if (ytlInt(@"speedIndex") == 0) {
+                [self removeGestureRecognizer:gesture];
+                continue;
+            }
+            return;
+        }
+    }
+
+    if (ytlInt(@"speedIndex") == 0) return;
 
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(speedmasterYtLite:)];
     longPress.minimumPressDuration = 0.3;
-    if (ytlInt(@"speedIndex") != 0) [self addGestureRecognizer:longPress];
+    longPress.name = kYTLSpeedmasterGestureName;
+    [self addGestureRecognizer:longPress];
 }
 
 %new

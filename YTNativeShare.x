@@ -20,13 +20,18 @@
 // Source code can be found here: https://github.com/jkhsjdhjs/youtube-native-share (Thanks to @jkhsjdhjs) 
 
 #include <UIKit/UIActivityViewController.h>
+#include <objc/message.h>
 
 #import "../YouTubeHeader/YTUIUtils.h"
 
 #import "../protobuf/objectivec/GPBDescriptor.h"
 #import "../protobuf/objectivec/GPBMessage.h"
 #import "../protobuf/objectivec/GPBUnknownField.h"
+#if __has_include("../protobuf/objectivec/GPBUnknownFieldSet.h")
 #import "../protobuf/objectivec/GPBUnknownFieldSet.h"
+#else
+#import "../protobuf/objectivec/GPBUnknownFields.h"
+#endif
 
 #define ytlBool(key)  [[[NSUserDefaults alloc] initWithSuiteName:@"com.dvntm.ytlite"] boolForKey:key]
 
@@ -62,13 +67,60 @@ typedef NS_ENUM(NSInteger, ShareEntityType) {
     ShareEntityFieldClip = 8
 };
 
-static inline NSString* extractIdWithFormat(GPBUnknownFieldSet *fields, NSInteger fieldNumber, NSString *format) {
-    if (![fields hasField:fieldNumber])
-        return nil;
-    GPBUnknownField *idField = [fields getField:fieldNumber];
-    if ([idField.lengthDelimitedList count] != 1)
-        return nil;
-    NSString *id = [[NSString alloc] initWithData:[idField.lengthDelimitedList firstObject] encoding:NSUTF8StringEncoding];
+static inline id ytlUnknownFieldsForMessage(GPBMessage *message) {
+    if (!message) return nil;
+
+    @try {
+        id unknownFields = [message valueForKey:@"unknownFields"];
+        if (unknownFields) return unknownFields;
+    } @catch (...) {}
+
+    Class unknownFieldsClass = NSClassFromString(@"GPBUnknownFields");
+    if (unknownFieldsClass && [unknownFieldsClass instancesRespondToSelector:@selector(initFromMessage:)]) {
+        return [[unknownFieldsClass alloc] initFromMessage:message];
+    }
+
+    return nil;
+}
+
+static inline NSData *ytlFirstLengthDelimited(id fields, NSInteger fieldNumber) {
+    if (!fields) return nil;
+
+    if ([fields respondsToSelector:@selector(hasField:)] && [fields respondsToSelector:@selector(getField:)]) {
+        BOOL hasField = ((BOOL (*)(id, SEL, NSInteger))objc_msgSend)(fields, @selector(hasField:), fieldNumber);
+        if (!hasField) return nil;
+
+        id unknownField = ((id (*)(id, SEL, NSInteger))objc_msgSend)(fields, @selector(getField:), fieldNumber);
+        NSArray *payloads = [unknownField valueForKey:@"lengthDelimitedList"];
+        if (![payloads isKindOfClass:[NSArray class]] || payloads.count != 1) return nil;
+
+        id payload = payloads.firstObject;
+        return [payload isKindOfClass:[NSData class]] ? (NSData *)payload : nil;
+    }
+
+    if ([fields respondsToSelector:@selector(fields:)]) {
+        NSArray *matchedFields = ((id (*)(id, SEL, int32_t))objc_msgSend)(fields, @selector(fields:), (int32_t)fieldNumber);
+        if (![matchedFields isKindOfClass:[NSArray class]] || matchedFields.count != 1) return nil;
+
+        id unknownField = matchedFields.firstObject;
+        id payload = nil;
+        @try {
+            payload = [unknownField valueForKey:@"lengthDelimited"];
+        } @catch (...) {
+            payload = nil;
+        }
+
+        return [payload isKindOfClass:[NSData class]] ? (NSData *)payload : nil;
+    }
+
+    return nil;
+}
+
+static inline NSString* extractIdWithFormat(id fields, NSInteger fieldNumber, NSString *format) {
+    NSData *payload = ytlFirstLengthDelimited(fields, fieldNumber);
+    if (!payload) return nil;
+
+    NSString *id = [[NSString alloc] initWithData:payload encoding:NSUTF8StringEncoding];
     return [NSString stringWithFormat:format, id];
 }
 
@@ -91,15 +143,16 @@ static inline NSString* extractIdWithFormat(GPBUnknownFieldSet *fields, NSIntege
         return %orig;
 
     GPBMessage *shareEntity = [%c(GPBMessage) deserializeFromString:updateShareSheetCommand.serializedShareEntity];
-    GPBUnknownFieldSet *fields = shareEntity.unknownFields;
+    id fields = ytlUnknownFieldsForMessage(shareEntity);
+    if (!fields) return %orig;
+
     NSString *shareUrl;
 
-    if ([fields hasField:ShareEntityFieldClip]) {
-        GPBUnknownField *shareEntityClip = [fields getField:ShareEntityFieldClip];
-        if ([shareEntityClip.lengthDelimitedList count] != 1)
-            return %orig;
-        GPBMessage *clipMessage = [%c(GPBMessage) parseFromData:[shareEntityClip.lengthDelimitedList firstObject] error:nil];
-        shareUrl = extractIdWithFormat(clipMessage.unknownFields, 1, @"https://youtube.com/clip/%@");
+    NSData *clipPayload = ytlFirstLengthDelimited(fields, ShareEntityFieldClip);
+    if (clipPayload) {
+        GPBMessage *clipMessage = [%c(GPBMessage) parseFromData:clipPayload error:nil];
+        id clipFields = ytlUnknownFieldsForMessage(clipMessage);
+        shareUrl = extractIdWithFormat(clipFields, 1, @"https://youtube.com/clip/%@");
     }
 
     if (!shareUrl)
